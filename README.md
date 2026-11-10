@@ -2,6 +2,18 @@
 
 2026-11-10
 
+## 應用介紹
+
+本系統是輕量的遠端主機狀態查詢服務：使用者或腳本送出一個查詢，server 回傳主機名稱、核心版本、負載、記憶體與時間，不需要登入 shell。實際用途例如巡檢多台 Linux 主機，或由監控腳本定期收集狀態。
+
+| 設計選擇 | 原因 |
+| --- | --- |
+| 每條連線 fork 一個子程序 | 程序的記憶體互相隔離，一個連線出錯或崩潰不會影響其他連線 |
+| 自訂二進位協定 | 固定 12 bytes header，解析成本低，封包邊界明確 |
+| CRC32 檢查 | 偵測傳輸中的資料或 header 錯誤 |
+| 連線上限與 idle timeout | 程序是有限資源，異常或閒置的 client 不能無限佔用 |
+| 共用 `.so` | client 與 server 使用同一份協定程式，避免兩邊實作不一致 |
+
 ## 1. 摘要與需求對照
 
 本專案以 C 實作 Linux client–server 系統資訊服務，期中規格的 8 項程式要求都有實作與執行證明。`demo.sh` 一行完成編譯、10 個 client 並發、tcpdump 與對照實驗；最終版連續 4 次執行，每次 34 項檢查全部通過。
@@ -35,6 +47,12 @@ Server 採用「父程序只管連線、子程序只服務一個 client」的分
 | `Makefile`、`demo.sh` | 建置與自動化測試 |
 
 常見流程是：client 連線、送查詢、收回應、送 BYE，等 server 先關閉後結束。Client 等 server 先關閉，是為了讓 TIME\_WAIT 固定留在 server 端，這正是 SO\_REUSEADDR 要解決的情境。
+
+### 2.1 連線流程
+
+一條連線只會走向三種結束方式：達到上限時收到 BUSY、逾時或封包錯誤時收到 ERROR，或正常送出 BYE。子程序結束後都由父程序回收，因此不會留下殭屍程序。
+
+![連線時序：正常流程、BUSY 與異常分支](docs/sequence.png)
 
 ## 3. 自訂封包協定
 
@@ -283,6 +301,23 @@ server_pid=5010
 
 圖 3：zombie 回收、timeout、連線上限、SO\_REUSEADDR、CRC 五組對照，最後一行為 34 通過、0 失敗。
 
+### 6.5 Real Test：壓力測試與跨網路測試
+
+最終版 server 在 512 條程式上限內全部成功，超過上限的連線都收到 BUSY，6 個級別共 18 輪沒有任何錯誤或殘留子程序。測試程式 `tests/stress_client.py` 是獨立的 Python 協定實作，所有連線建立完成後才同時送出請求，每條連線送 20 個 ALL 查詢。
+
+| 並發連線 | 成功 | BUSY | 尖峰 | 建立時間 (s) | 吞吐量 (req/s) | p50 (ms) | p95 (ms) | p99 (ms) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 10 | 10 | 0 | 10 | 0.00 | 11,990 | 0.73 | 1.08 | 1.18 |
+| 50 | 50 | 0 | 50 | 0.01 | 12,400 | 3.52 | 4.63 | 5.09 |
+| 100 | 100 | 0 | 100 | 0.02 | 11,852 | 7.73 | 9.44 | 10.01 |
+| 200 | 200 | 0 | 200 | 0.04 | 12,429 | 14.70 | 16.74 | 16.85 |
+| 500 | 500 | 0 | 500 | 0.10 | 12,583 | 36.43 | 39.01 | 42.89 |
+| 600 | 512 | 88 | 512 | 0.12 | 12,116 | 38.56 | 43.71 | 44.49 |
+
+表中數字是 3 輪的中位數，server 連線上限設為 512。吞吐量維持在約 12,000 req/s，延遲隨連線數增加，這符合固定處理能力下的排隊現象；因為 client 是單執行緒 Python，這個數字不代表 server 的最大能力。
+
+跨網路測試由 Windows 執行同一支 Python client，連到 WSL2 內綁定 `0.0.0.0` 的 server，封包經過虛擬網卡 `eth0`（`172.22.176.1` ↔ `172.22.181.214`），不是 loopback。共跑 3 輪、每輪 10 條連線，30 條全部成功，p50 為 0.89–1.12 ms。Tcpdump 在 `eth0` 抓到 1,320 個協定封包，每個的格式與 CRC 都通過驗證，也證明 C 與 Python 兩邊的協定實作可以互通。
+
 ## 7. 封包擷取與分析
 
 Tcpdump 在 loopback 抓到的封包與自訂格式完全一致，最終版共有 45 個封包的 TCP payload 以 Magic `0x4E53` 開頭。請求與回應都在同一個 TCP segment 內送出，因此可以直接用 BPF 過濾：
@@ -361,17 +396,42 @@ TCP 長度也能對上：請求是 12 bytes 的 header，回應是 12 + 238 = 25
 
 ## 9. 測試限制與討論
 
-目前的驗證都在單機 loopback 完成，以下是尚未涵蓋或設計上的限制。
+測試與審查找到 2 個真實問題並已修正，其餘風險列在 9.1 節。以下是目前的測試範圍限制。
 
-- **執行權限：** 上述結果是以 root 執行 `demo.sh` 取得；一般使用者透過 sudo 啟動 tcpdump 的流程尚未實測。
-- **網路環境：** 未測試跨電腦連線，server 預設只綁 `127.0.0.1`。
-- **安全性：** CRC32 只偵測傳輸錯誤，攻擊者可以重算 CRC，協定也沒有加密與身分驗證。對外開放前需要另外加上。
-- **負載上限：** 每條連線 fork 一次，成本隨連線數增加；程式上限為 512 條，實測最多到 10 條並發。
-- **對照選項：** `-X` 只供實驗，正式執行不應使用。關閉上限時實際上限是追蹤表容量 512，避免陣列滿滿。
+- **執行權限：** 測試都以 root 執行；一般使用者透過 sudo 啟動 tcpdump 的流程尚未實測。
+- **網路環境：** 跨網路測試是 Windows 到 WSL2 的虛擬網卡，沒有經過實體網路線或第二台電腦。
+- **壓力測試的瓶頸：** 測試程式是單執行緒 Python，巢狀吞吐量可能受 client 限制，數字不代表 server 的極限。
+- **測試時間：** 每輪只有數秒，沒有做數小時的長時間穩定性測試。
+- **對照選項：** `-X` 只供實驗，正式執行不應使用。關閉上限時實際上限為追蹤表容量 512。
+
+### 9.1 安全稽核（Auditing）
+
+稽核結合工具掃描、故障測試與人工審查。工具沒有回報記憶體錯誤，最大的剩餘風險是明文傳輸、沒有身分驗證，以及單一來源能佔滿連線名額。
+
+| 檢查方式 | 範圍 | 結果 |
+| --- | --- | --- |
+| gcc `-fanalyzer -Wshadow -Wconversion -Wformat=2` | 全部 C 檔案 | 無分析器告警；3 個 `unsigned long` 轉 `double` 提示，位於負載平均值，對精度無實際影響 |
+| AddressSanitizer + UBSan | `tests/malformed_test.py` | 無記憶體或未定義行為錯誤 |
+| 異常輸入測試 | 15 項檢查 | 全部通過 |
+| 模糊測試 | 500 個隨機竄改的封包 | server 存活，無殘留子程序 |
+
+上述測試能增加信心，但不能證明程式沒有漏洞。
+
+| 問題 | 級別 | 影響 | 狀態與對策 |
+| --- | --- | --- | --- |
+| `listen` 佇列 128 小於上限 512 | 中 | 500 條同時連線時建立時間約 1.1 秒 | **已修正**：佇列改為上限值，降到約 0.1 秒 |
+| fd 用盡時 `accept` 空轉 | 中 | 舊版 3 秒寫出 1,878,423 行 log，CPU 空轉 | **已修正**：錯誤後暫停 100 ms，同樣時間只剩 32 行 |
+| 明文傳輸 | 高 | 可直接用 tcpdump 看到主機資訊 | 未處理：對外開放前需加上 TLS |
+| 沒有身分驗證 | 高 | 連得到 port 就能查詢主機資訊 | 已緩解：預設只綁 `127.0.0.1`；後續可加 token 或 HMAC |
+| CRC32 不防惡意竄改 | 中 | 攻擊者可以重算 CRC | 未處理：需要防竄改時改用 HMAC |
+| 單一來源可佔滿名額 | 中 | 定期送 ping 的連線不會逾時，可長期佔位 | 未處理：可加各 IP 上限與工作階段最長時間 |
+| client 直接印出回應 | 低 | 惡意 server 可送出終端機控制字元 | 未處理：可過濾不可印字元 |
+| 處理不可信的 Length | 檢查通過 | 超長封包在收 payload 前就拒絕 | 測試涵蓋 8193 bytes 與 4 GiB |
+| 訊號處理安全 | 檢查通過 | handler 只用 `waitpid` 並還原 `errno`，不呼叫 log | 名額與 `fork` 區段會擋住訊號 |
 
 ## 10. 完整原始碼
 
-專案共 7 個檔案，總計約 1,460 行。
+以下是系統本身的 7 個檔案，壓力與異常測試程式在 repo 的 `tests/` 目錄。
 
 ### include/netproto.h
 
@@ -808,7 +868,8 @@ void log_msg(const char *level, const char *fmt, ...)
 #define DEFAULT_MAX_CONN  32
 #define DEFAULT_IDLE_SEC  30
 #define MAX_CONN_LIMIT    512
-#define LISTEN_BACKLOG    128
+#define LISTEN_BACKLOG    MAX_CONN_LIMIT /* 小於上限時，尖峰連線會溢出並等 TCP 重送 */
+#define ACCEPT_BACKOFF_USEC 100000
 #define LOAD_SCALE        65536.0 /* sysinfo.loads 的定點數比例 (1 << 16) */
 
 static volatile sig_atomic_t g_stop;
@@ -1228,8 +1289,11 @@ int main(int argc, char **argv)
         conn_fd = accept(listen_fd, (struct sockaddr *)&peer, &peer_len);
         if (conn_fd < 0) {
             if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK &&
-                errno != ECONNABORTED)
+                errno != ECONNABORTED) {
                 LOG_WARN("accept: %s", strerror(errno));
+                /* fd 用盡時連線仍在佇列，select 會立刻返回，暫停避免空轉 */
+                usleep(ACCEPT_BACKOFF_USEC);
+            }
             continue;
         }
         inet_ntop(AF_INET, &peer.sin_addr, peer_ip, sizeof(peer_ip));

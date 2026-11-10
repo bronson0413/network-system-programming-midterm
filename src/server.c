@@ -22,7 +22,8 @@
 #define DEFAULT_MAX_CONN  32
 #define DEFAULT_IDLE_SEC  30
 #define MAX_CONN_LIMIT    512
-#define LISTEN_BACKLOG    128
+#define LISTEN_BACKLOG    MAX_CONN_LIMIT /* 小於上限時，尖峰連線會溢出並等 TCP 重送 */
+#define ACCEPT_BACKOFF_USEC 100000
 #define LOAD_SCALE        65536.0 /* sysinfo.loads 的定點數比例 (1 << 16) */
 
 static volatile sig_atomic_t g_stop;
@@ -442,8 +443,11 @@ int main(int argc, char **argv)
         conn_fd = accept(listen_fd, (struct sockaddr *)&peer, &peer_len);
         if (conn_fd < 0) {
             if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK &&
-                errno != ECONNABORTED)
+                errno != ECONNABORTED) {
                 LOG_WARN("accept: %s", strerror(errno));
+                /* fd 用盡時連線仍在佇列，select 會立刻返回，暫停避免空轉 */
+                usleep(ACCEPT_BACKOFF_USEC);
+            }
             continue;
         }
         inet_ntop(AF_INET, &peer.sin_addr, peer_ip, sizeof(peer_ip));
