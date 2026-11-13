@@ -1,8 +1,8 @@
 /*
- * client.c - 查詢 server 的系統資訊
+ * client.c - query system information from the server
  *
- * 結束碼：0 成功、1 連線或協定錯誤、2 參數錯誤、
- *         3 server 已達連線上限、4 server 回報錯誤（例如 idle timeout）
+ * Exit codes: 0 success, 1 connection or protocol error, 2 bad arguments,
+ *             3 server reached its connection limit, 4 server reported an error (e.g. idle timeout)
  */
 #include "netproto.h"
 
@@ -65,13 +65,13 @@ static int connect_to(const char *host, const char *port)
     return fd;
 }
 
-/* 成功回傳 0，否則回傳程序結束碼 */
+/* Returns 0 on success, otherwise the process exit code */
 static int transact(int fd, uint8_t op, const void *data, uint32_t len,
                     int corrupt, int timeout_sec, proto_packet_t *reply)
 {
     int send_rc = corrupt ? proto_send_corrupted(fd, op, data, len)
                           : proto_send(fd, op, data, len);
-    /* 即使送出失敗也要收：server 關閉前送的 BUSY/ERROR 可能還在緩衝區 */
+    /* Receive even if the send failed: a BUSY/ERROR sent before the server closed may still be buffered */
     int rc = proto_recv(fd, reply, timeout_sec);
 
     if (rc != PROTO_OK) {
@@ -190,7 +190,7 @@ int main(int argc, char **argv)
         sleep((unsigned)hold_sec);
 
     rc = transact(fd, OP_BYE, NULL, 0, 0, timeout_sec, &reply);
-    /* 等 server 先關閉，TIME_WAIT 才固定留在 server 端 */
+    /* Wait for the server to close first so TIME_WAIT always stays on the server side */
     if (rc == 0)
         (void)proto_recv(fd, &reply, timeout_sec);
     close(fd);
