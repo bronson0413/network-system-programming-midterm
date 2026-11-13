@@ -1,4 +1,4 @@
-/* log.c - log lines with time and PID; lines from concurrent children never interleave */
+/* log.c - 帶時間與 PID 的 log，多個子程序同時輸出時行內容不會交錯 */
 #include "netproto.h"
 
 #include <stdarg.h>
@@ -50,7 +50,7 @@ void log_msg(const char *level, const char *fmt, ...)
                                                   : sizeof(line) - off - 2;
     line[off++] = '\n';
 
-    /* Write the whole line with one write(), bypassing stdio buffering */
+    /* 整行一次 write，不經 stdio 緩衝 */
     if (write(STDERR_FILENO, line, off) < 0)
         return;
 }

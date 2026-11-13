@@ -1,14 +1,14 @@
 /*
- * netproto.h - public interface of libnetproto.so: packet protocol and logging.
+ * netproto.h - libnetproto.so 的公開介面：封包協定與 log。
  *
- * Packet format (all multi-byte fields in network byte order):
+ * 封包格式（多位元組欄位皆為 network byte order）：
  *
  *   offset  size  field
  *        0     2  Magic   (0x4E53, "NS")
  *        2     1  Version (1)
  *        3     1  OpCode
- *        4     4  Length  (payload length, header excluded)
- *        8     4  CRC32   (over the first 8 header bytes + payload)
+ *        4     4  Length  (payload 長度，不含 header)
+ *        8     4  CRC32   (涵蓋 header 前 8 bytes + payload)
  *       12     N  Payload
  */
 #ifndef NETPROTO_H
@@ -22,11 +22,11 @@
 #define PROTO_HEADER_SIZE  12
 #define PROTO_MAX_PAYLOAD  8192
 
-/* Reply OpCode = request OpCode | PROTO_OP_RESPONSE */
+/* 回應的 OpCode = 請求的 OpCode | PROTO_OP_RESPONSE */
 #define PROTO_OP_RESPONSE  0x80
 
 enum proto_opcode {
-    OP_PING     = 0x01, /* payload is echoed back */
+    OP_PING     = 0x01, /* payload 原樣回傳 */
     OP_HOSTNAME = 0x02,
     OP_UPTIME   = 0x03,
     OP_LOADAVG  = 0x04,
@@ -35,54 +35,54 @@ enum proto_opcode {
     OP_TIME     = 0x07,
     OP_ALL      = 0x08,
     OP_BYE      = 0x0F,
-    OP_BUSY     = 0xFE, /* connection limit reached; the server then closes */
-    OP_ERROR    = 0xFF  /* payload is the error message */
+    OP_BUSY     = 0xFE, /* 已達連線上限，server 隨後關閉連線 */
+    OP_ERROR    = 0xFF  /* payload 為錯誤訊息 */
 };
 
 enum proto_status {
     PROTO_OK            =  0,
-    PROTO_ERR_CLOSED    = -1, /* peer closed cleanly at a packet boundary */
+    PROTO_ERR_CLOSED    = -1, /* 對方在封包邊界正常關閉 */
     PROTO_ERR_IO        = -2,
     PROTO_ERR_TIMEOUT   = -3,
     PROTO_ERR_MAGIC     = -4,
     PROTO_ERR_VERSION   = -5,
     PROTO_ERR_LENGTH    = -6,
     PROTO_ERR_CRC       = -7,
-    PROTO_ERR_TRUNCATED = -8  /* peer closed in the middle of a packet */
+    PROTO_ERR_TRUNCATED = -8  /* 對方在封包中途關閉 */
 };
 
 typedef struct {
     uint8_t  opcode;
     uint32_t length;
-    /* One extra byte so a '\0' can be appended and the payload used as a string */
+    /* 多留 1 byte，收到後補 '\0' 方便當字串用 */
     uint8_t  payload[PROTO_MAX_PAYLOAD + 1];
 } proto_packet_t;
 
-/* CRC-32 (IEEE 802.3); pass seed 0, or a previous result to continue a running CRC */
+/* CRC-32 (IEEE 802.3)，seed 傳 0；可把前一次結果當 seed 接續計算 */
 uint32_t proto_crc32(uint32_t seed, const void *data, size_t len);
 
-/* Build header + payload and send them together; returns enum proto_status */
+/* 將 header 與 payload 組成一筆送出，回傳 enum proto_status */
 int proto_send(int fd, uint8_t opcode, const void *payload, uint32_t length);
 
-/* Testing only: flip the first payload byte after computing the CRC, simulating corruption */
+/* 測試用：算完 CRC 後才竄改 payload 第一個 byte，模擬傳輸錯誤 */
 int proto_send_corrupted(int fd, uint8_t opcode, const void *payload,
                          uint32_t length);
 
-/* Comparison experiments only: when 0, proto_recv skips the CRC check */
+/* 對照實驗用：傳 0 時 proto_recv 不驗證 CRC */
 void proto_set_crc_check(int enabled);
 
 /*
- * Wait with select() and receive one complete packet.
- * timeout_sec is the deadline for the whole packet; 0 means no limit.
+ * 用 select() 等待並收一個完整封包。
+ * timeout_sec 是整個封包的期限，傳 0 表示不限時。
  */
 int proto_recv(int fd, proto_packet_t *pkt, int timeout_sec);
 
 const char *proto_strerror(int status);
 
-/* Parse a decimal integer and range-check it; returns 0 on success, -1 on failure */
+/* 解析十進位整數並檢查範圍，成功回傳 0，失敗回傳 -1 */
 int parse_int(const char *text, int min, int max, int *out);
 
-/* Logging: level 1, the DEBUG macro, decides whether debug code is compiled in; level 2, -d, decides whether it prints at run time */
+/* log：第一層 DEBUG 巨集決定是否編入，第二層 -d 決定執行時是否輸出 */
 void log_set_debug(int enabled);
 int  log_debug_enabled(void);
 void log_msg(const char *level, const char *fmt, ...)
@@ -100,7 +100,7 @@ void log_msg(const char *level, const char *fmt, ...)
                     ##__VA_ARGS__);                                    \
     } while (0)
 #else
-/* Keep if (0) so the compiler still checks format and arguments; optimization leaves no code or strings */
+/* 保留 if (0) 讓編譯器仍檢查格式與參數，最佳化後不留下任何程式碼或字串 */
 #define LOG_DEBUG(fmt, ...)                                            \
     do {                                                               \
         if (0)                                                         \

@@ -2,7 +2,7 @@
 
 Network and System Programming — midterm project. A Linux client–server service in C: the server `fork()`s one child process per connection, and clients query the server host's system information over a custom binary protocol with a CRC32 check.
 
-**Quick links:** [Diagrams](#2-diagrams) · [Packet capture and analysis (sniffer)](#4-packet-capture-and-analysis-sniffer) · [Robustness comparisons](#7-robustness-with-and-without-each-mechanism) · [Build and run](#5-build-and-run)
+**Quick links:** [Diagrams](#2-diagrams) · [Packet capture and analysis (sniffer)](#4-packet-capture-and-analysis-sniffer) · [Robustness comparisons](#8-robustness-with-and-without-each-mechanism) · [Build and run](#5-build-and-run)
 
 Everything below is reproduced by one command:
 
@@ -22,7 +22,7 @@ It builds the project, runs 10 concurrent clients, captures the traffic with tcp
 | Two-level debug log | `#ifdef DEBUG` at compile time, `-d` at run time | demo stages 1, 7, 8 |
 | Shared utilities in a `.so`, linked by both sides | `lib/libnetproto.so`, rpath `$ORIGIN/lib` | `readelf` shows `RPATH [$ORIGIN/lib]` (demo stage 2) |
 | Client requests system information | Host name, kernel, uptime, load, memory, time | demo stage 5 |
-| Robustness, at least three with/without examples | Five comparisons plus malformed-packet tests | [Section 7](#7-robustness-with-and-without-each-mechanism) |
+| Robustness, at least three with/without examples | Five comparisons plus malformed-packet tests | [Section 8](#8-robustness-with-and-without-each-mechanism) |
 | Makefile or CMake | `make`, `make debug`, `make demo` | demo stages 1, 2 |
 
 ## 2. Diagrams
@@ -117,7 +117,7 @@ Cross-checks:
 
 - IP total length: request `0x0040` = 64 = 20 (IP) + 32 (TCP) + 12; reply `0x012b` = 299 = 20 + 32 + 247, and 247 = 12 + 235.
 - The request covers 12 sequence numbers and the reply acknowledges `ack 12`.
-- The payload is plaintext, so anyone who can capture the traffic can read it (see [Limitations](#8-limitations)).
+- The payload is plaintext, so anyone who can capture the traffic can read it (see [Limitations](#9-limitations)).
 
 ## 5. Build and run
 
@@ -183,9 +183,19 @@ Client exit codes: 0 success, 1 connection or protocol error, 2 bad arguments, 3
 | 7 | Client idle 7 s, timeout 5 s | Server sends ERROR (exit 4); DEBUG output present with `-d` |
 | 8 | Restart on the same port without `-d` | Bind succeeds; no DEBUG output without `-d` (debug level 2) |
 | 9 | Stop and read the capture | At least 40 protocol frames; one request/reply printed in hex |
-| 10–14 | Five with/without experiments | Section 7 |
+| 10–14 | Five with/without experiments | Section 8 |
 
-## 7. Robustness: with and without each mechanism
+## 7. Execution screenshots
+
+A full `./demo.sh` run on WSL2 Ubuntu (34 passed, 0 failed). The script's own messages are in Chinese; each stage is described in [Section 6](#6-what-demosh-checks).
+
+![demo.sh stages 1-6](docs/demo-1.png)
+
+![demo.sh stages 6-9](docs/demo-2.png)
+
+![demo.sh stages 9-14 and the final result](docs/demo-3.png)
+
+## 8. Robustness: with and without each mechanism
 
 The same binary is used in every pair; `-X` disables exactly one mechanism, so any difference comes from that mechanism.
 
@@ -216,7 +226,7 @@ python3 tests/malformed_test.py ./server
 python3 tests/stress_client.py --port 9000 -n 100 -r 20
 ```
 
-## 8. Limitations
+## 9. Limitations
 
 - Traffic is plaintext and there is no authentication; the server binds to `127.0.0.1` by default. Exposing it would need TLS and a token or HMAC.
 - CRC32 detects accidental corruption, not deliberate tampering (an attacker can recompute it).
@@ -224,7 +234,7 @@ python3 tests/stress_client.py --port 9000 -n 100 -r 20
 - The stress client is single-threaded Python, so its throughput (about 12,000 requests/s) is not the server's limit.
 - `-X` exists only for the experiments and should not be used in normal operation.
 
-## 9. Project layout
+## 10. Project layout
 
 ```text
 include/netproto.h   protocol constants, opcodes, error codes, log macros, library interface

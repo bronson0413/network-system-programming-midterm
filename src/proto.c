@@ -1,4 +1,4 @@
-/* proto.c - packet encode/decode, CRC32 and socket I/O with deadlines */
+/* proto.c - 封包編解碼、CRC32 與帶期限的 socket I/O */
 #include "netproto.h"
 
 #include <arpa/inet.h>
@@ -38,7 +38,7 @@ static int64_t now_ms(void)
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-/* deadline_ms == 0 means no limit; after a signal interrupt, wait again for the remaining time */
+/* deadline_ms 為 0 表示不限時；被 signal 打斷時用剩餘時間重新等待 */
 static int wait_readable(int fd, int64_t deadline_ms)
 {
     if (fd >= FD_SETSIZE)
@@ -105,7 +105,7 @@ static int send_frame(int fd, uint8_t opcode, const void *payload,
     if (length > PROTO_MAX_PAYLOAD)
         return PROTO_ERR_LENGTH;
 
-    /* Write field by field; do not depend on struct memory layout */
+    /* 逐欄位寫入，不依賴 struct 的記憶體配置 */
     memcpy(frame, &magic, 2);
     frame[2] = PROTO_VERSION;
     frame[3] = opcode;
@@ -127,7 +127,7 @@ static int send_frame(int fd, uint8_t opcode, const void *payload,
     size_t sent = 0;
 
     while (sent < total) {
-        /* MSG_NOSIGNAL: if the peer has closed, return an error instead of raising SIGPIPE */
+        /* MSG_NOSIGNAL：對方已關閉時回傳錯誤而不是收到 SIGPIPE */
         ssize_t n = send(fd, frame + sent, total - sent, MSG_NOSIGNAL);
         if (n < 0) {
             if (errno == EINTR)
@@ -169,7 +169,7 @@ int proto_recv(int fd, proto_packet_t *pkt, int timeout_sec)
     pkt->length = ntohl(net_len);
     want = ntohl(net_crc);
 
-    /* Validate the header first so we never read more data based on an untrusted Length */
+    /* 先驗證 header，避免依不可信的 Length 繼續收資料 */
     if (ntohs(magic) != PROTO_MAGIC)
         return PROTO_ERR_MAGIC;
     if (hdr[2] != PROTO_VERSION)

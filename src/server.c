@@ -1,4 +1,4 @@
-/* server.c - system information server that fork()s one child per connection */
+/* server.c - 每條連線 fork() 一個子程序的系統資訊 server */
 #include "netproto.h"
 
 #include <arpa/inet.h>
@@ -22,18 +22,18 @@
 #define DEFAULT_MAX_CONN  32
 #define DEFAULT_IDLE_SEC  30
 #define MAX_CONN_LIMIT    512
-#define LISTEN_BACKLOG    MAX_CONN_LIMIT /* if smaller than the limit, peak connections overflow and wait for TCP retransmission */
+#define LISTEN_BACKLOG    MAX_CONN_LIMIT /* 小於上限時，尖峰連線會溢出並等 TCP 重送 */
 #define ACCEPT_BACKOFF_USEC 100000
-#define LOAD_SCALE        65536.0 /* fixed-point scale of sysinfo.loads (1 << 16) */
+#define LOAD_SCALE        65536.0 /* sysinfo.loads 的定點數比例 (1 << 16) */
 
 static volatile sig_atomic_t g_stop;
 static volatile sig_atomic_t g_active;
 static volatile sig_atomic_t g_reaped;
-/* The main loop modifies these only while SIGCHLD is blocked, so the signal handler can access them safely */
+/* 主流程只在擋住 SIGCHLD 時修改，signal handler 內才能安全存取 */
 static pid_t g_children[MAX_CONN_LIMIT];
 static int g_max_conn = DEFAULT_MAX_CONN;
 
-/* Mechanisms disabled with -X, used only for with/without robustness experiments */
+/* -X 關閉的機制，只供「有／無穩健機制」對照實驗使用 */
 static int g_no_reap, g_no_idle, g_no_limit, g_no_reuseaddr;
 
 static int disable_mechanism(const char *name)
@@ -54,7 +54,7 @@ static int disable_mechanism(const char *name)
     return 0;
 }
 
-/* One SIGCHLD may stand for several exited children, so loop until none is left */
+/* 一次 SIGCHLD 可能代表多個子程序結束，必須迴圈回收到沒有為止 */
 static void on_sigchld(int sig)
 {
     int saved_errno = errno;
@@ -179,7 +179,7 @@ static size_t add_process(char *buf, size_t cap, size_t off)
                    (int)getpid(), (int)getppid());
 }
 
-/* Returns the payload length; -1 if the OpCode is not a query */
+/* 回傳 payload 長度；不是查詢類 OpCode 時回傳 -1 */
 static long build_info(uint8_t op, char *buf, size_t cap)
 {
     size_t off = 0;
@@ -226,7 +226,7 @@ static void serve_client(int fd, int idle_sec)
             return;
         }
         if (rc != PROTO_OK) {
-            /* The stream can no longer be aligned to packet boundaries: report and close */
+            /* 串流已無法對齊封包邊界，回報後直接結束連線 */
             LOG_WARN("closing connection: %s", proto_strerror(rc));
             send_error(fd, proto_strerror(rc));
             return;
@@ -276,7 +276,7 @@ static int create_listener(const char *addr, int port)
         return -1;
     }
 
-    /* Must be set before bind() so a restart is not blocked by TIME_WAIT */
+    /* 必須在 bind() 前設定，server 重啟時才不會被 TIME_WAIT 擋住 */
     if (!g_no_reuseaddr &&
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) < 0) {
         LOG_ERROR("setsockopt(SO_REUSEADDR): %s", strerror(errno));
@@ -286,7 +286,7 @@ static int create_listener(const char *addr, int port)
         LOG_ERROR("bind %s:%d: %s", addr, port, strerror(errno));
         goto fail;
     }
-    /* Even after select() reports readable, the peer may have aborted; accept() must not block */
+    /* select() 說可讀後，連線仍可能已被對方中止，accept() 不可卡住 */
     if (fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK) < 0) {
         LOG_ERROR("fcntl: %s", strerror(errno));
         goto fail;
@@ -302,7 +302,7 @@ fail:
     return -1;
 }
 
-/* Child process entry point; never returns */
+/* 子程序入口，不會返回 */
 static void run_child(int listen_fd, int conn_fd, int idle_sec,
                       const sigset_t *orig_mask)
 {
@@ -314,7 +314,7 @@ static void run_child(int listen_fd, int conn_fd, int idle_sec,
     sigprocmask(SIG_SETMASK, orig_mask, NULL);
     close(listen_fd);
 
-    /* If the client never reads, send() also needs a deadline so it cannot hold a slot forever */
+    /* client 一直不讀時，send() 也要有期限，才不會永遠佔住名額 */
     if (setsockopt(conn_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) < 0)
         LOG_WARN("setsockopt(SO_SNDTIMEO): %s", strerror(errno));
 
@@ -398,7 +398,7 @@ int main(int argc, char **argv)
     if (optind != argc)
         goto bad_usage;
 
-    /* With the limit disabled, use the tracking table's capacity so g_children cannot overflow */
+    /* 關閉上限時改用追蹤表的容量，g_children 仍不會溢位 */
     if (g_no_limit)
         g_max_conn = MAX_CONN_LIMIT;
 
@@ -429,7 +429,7 @@ int main(int argc, char **argv)
         int ready, conn_fd;
         pid_t pid;
 
-        /* Wake up periodically so a stop signal that arrived before select is still seen */
+        /* 定期醒來，確保在 select 前到達的停止訊號也會被看見 */
         FD_ZERO(&rfds);
         FD_SET(listen_fd, &rfds);
         ready = select(listen_fd + 1, &rfds, NULL, NULL, &tick);
@@ -445,14 +445,14 @@ int main(int argc, char **argv)
             if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK &&
                 errno != ECONNABORTED) {
                 LOG_WARN("accept: %s", strerror(errno));
-                /* When fds run out the connection stays queued and select returns at once; pause to avoid spinning */
+                /* fd 用盡時連線仍在佇列，select 會立刻返回，暫停避免空轉 */
                 usleep(ACCEPT_BACKOFF_USEC);
             }
             continue;
         }
         inet_ntop(AF_INET, &peer.sin_addr, peer_ip, sizeof(peer_ip));
 
-        /* Limit check, fork and registration must not be interrupted by SIGCHLD */
+        /* 名額檢查、fork 與登記必須不被 SIGCHLD 插入 */
         sigprocmask(SIG_BLOCK, &block_mask, &orig_mask);
 
         if (g_active >= g_max_conn) {

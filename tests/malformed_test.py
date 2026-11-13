@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Start the server, send malformed and randomly corrupted packets, check the replies and confirm no child process is left.
+"""啟動 server，送出各種異常封包與隨機竄改封包，檢查回應並確認沒有殘留子程序。
 
-Usage: tests/malformed_test.py [server binary] [fuzz rounds]
+用法：tests/malformed_test.py [server 執行檔] [fuzz 次數]
 """
 import os
 import random

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Independent Python implementation of the protocol for testing concurrency, latency and throughput (runs on Linux and Windows).
+"""獨立的 Python 協定實作，測試並發、延遲與吞吐量（Linux 與 Windows 皆可執行）。
 
-All connections are established before any request is sent, so the connections really overlap during measurement.
+所有連線都建立完成後才同時開始送請求，確保量測期間連線確實重疊。
 """
 import argparse
 import asyncio

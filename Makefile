@@ -1,6 +1,6 @@
-# make            release build (LOG_DEBUG not compiled in)
-# make debug      debug build (-DDEBUG; enable at run time with -d)
-# make demo       run demo.sh
+# make            release 版（LOG_DEBUG 不編入）
+# make debug      debug 版（-DDEBUG，執行時再用 -d 開啟）
+# make demo       執行 demo.sh
 CC      = gcc
 CFLAGS  ?= -O2
 CFLAGS  += -std=gnu11 -Wall -Wextra -Iinclude -MMD -MP
@@ -35,7 +35,7 @@ $(LIB_OBJS): CFLAGS += -fPIC
 obj/%.o: src/%.c obj/.flags | obj
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# Force a rebuild when the compiler flags change (e.g. switching DEBUG)
+# 編譯參數改變（例如切換 DEBUG）時強制重新編譯
 obj/.flags: FORCE | obj
 	@echo '$(CFLAGS)' | cmp -s - $@ 2>/dev/null || echo '$(CFLAGS)' > $@
 
